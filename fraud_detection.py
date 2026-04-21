@@ -112,13 +112,16 @@ def check_text_for_fraud(text):
 
     # --- PASSO D: Classificação Final ---
     final_score = min(score, 100) # Garante que não passe de 100 para o DB
-    is_fraud = final_score >= 55
+     
     
     # Define o risk_level baseado no score
     if final_score > 75:
         level = "CRÍTICO"
-    elif is_fraud:
+    elif final_score >= 55:
         level = "ALTO"
+        is_fraud = True
+    elif final_score >= 35:
+        level = "MÉDIO"
     else:
         level = "BAIXO"
     
