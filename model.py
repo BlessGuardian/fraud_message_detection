@@ -24,7 +24,8 @@ def treat_message_llm(mensagem):
     - Responda exclusivamente em formato JSON.
     - Não inclua explicações fora do bloco JSON.
     - Não use blocos de código Markdown
-    - Mantenha a chave "score" entre 0 (totalmente seguro) e 100 (fraude confirmada).
+    - Mantenha a chave "score" entre 0 (totalmente seguro) e 1 (fraude confirmada).
+    - O veredito curto deve ser curto o suficiente para caber em notifações de celular
     '''
     prompt_user=f'''
     Analise a seguinte mensagem e forneça o resultado no formato JSON especificado.
@@ -33,14 +34,12 @@ def treat_message_llm(mensagem):
     {mensagem}
 
     **Formato de resposta esperado:**
-    {{
-    "analise": {{
+     {{
         "tentativa_fraude": boolean,
         "score": float, 
         "categoria": "phishing | scam | seguro | outro",
         "indicadores": ["lista de pontos suspeitos identificados"],
         "veredito_curto": "string resumindo a decisão"
-    }}
     }}
     '''
 

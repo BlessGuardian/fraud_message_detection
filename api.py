@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
-from fraud_detection import check_text_for_fraud
-from database import register_scam_attempt, create_table_if_not_exists
+# from fraud_detection import check_text_for_fraud
+from database import register_fraud_log, get_fraud_logs
 from model import treat_message_llm
 import uvicorn
 
@@ -11,36 +11,56 @@ app = FastAPI(title="Bless Guardian", description="Agente anti-fraude de detecç
 class MessageRequest(BaseModel):
     user_id: str
     message_content: str
-
-# Inicialização do banco (Executado ao subir a API)
-@app.on_event("startup")
-def startup_event():
-    create_table_if_not_exists()
-
+    source: str
+    
 @app.post("/detect", status_code=201)
-async def detect_fraud(request: MessageRequest):
+def detect_fraud(request: MessageRequest):
     try:
-        # 1. Tratamento Inicial com Bert
-        score, is_fraud, level = check_text_for_fraud(request.message_content)
-        db_success = register_scam_attempt(
-            request.user_id, 
-            request.message_content, 
-            score, 
-            level, 
-            is_fraud
+    
+        analise = treat_message_llm(request.message_content)
+
+        db_success = register_fraud_log(
+        user_id=request.user_id, # Exemplo de UUID
+        content=request.message_content,
+        score=analise.get("score"), # float8
+        is_fraud=analise.get("tentativa_fraude"), # bool
+        explanation=analise.get("veredito_curto"), # text
+        source= request.source # varchar(50)
         )
-        if is_fraud:
-            return treat_message_llm(request.message_content)
-        # 2. Persistência no Aiven
-        else:
-            return {
-            "score": score,
-            "is_fraud": is_fraud,
-            "risk_level": level,
-            "db_status": "synced" if db_success else "local_only"
+        return {
+            "status_db": db_success,
+            "analise": analise
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# @app.post("/detectbert", status_code=201)
+# async def detect_fraud_mixed(request: MessageRequest):
+#     try:
+#         score, is_fraud, level = check_text_for_fraud(request.message_content)
+        
+#         return {
+#             "score": score,
+#             "is_fraud": is_fraud,
+#             "risk_level": level,
+#         }
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/logs")
+def api_get_logs(user_id: str = None, limit: int = 50, offset: int = 0):
+    
+    resultados = get_fraud_logs(user_id=user_id, limit=limit, offset=offset)
+    
+    # Se retornou um erro estruturado
+    if isinstance(resultados, dict) and "error" in resultados:
+        return {"status": "error", "message": resultados["error"]}
+        
+    return {
+        "status": "success",
+        "total_logs": len(resultados),
+        "data": resultados
+    }
 
 @app.get("/health")
 def health_check():
@@ -48,4 +68,4 @@ def health_check():
 
 if __name__ == "__main__":
     # Porta 8080 é o padrão comum para o App Runner
-    uvicorn.run(app, host="127.0.0.1", port=8080)
+    uvicorn.run(app, host="0.0.0.0", port=8080)
