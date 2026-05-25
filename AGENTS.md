@@ -33,6 +33,14 @@ Entrada correta de `/detect`:
 }
 ```
 
+Valores de `source` esperados pelo Android atual:
+
+```text
+SMS, WHATSAPP, TELEGRAM, INSTAGRAM, MANUAL, UNKNOWN
+```
+
+`MANUAL` representa mensagens coladas pelo usuario na aba `Analisar` do app Android. O endpoint `/detect` deve tratar esse caso igual aos demais: analisar, gravar em `fraud_logs` e retornar `status_db`.
+
 Resposta esperada:
 
 ```json
