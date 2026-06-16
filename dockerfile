@@ -1,13 +1,9 @@
-FROM python:3.10-slim
+FROM public.ecr.aws/lambda/python:3.10
 
-WORKDIR /app
+COPY requirements.txt ${LAMBDA_TASK_ROOT}
 
-COPY requirements.txt .
+RUN pip install -r requirements.txt
 
-RUN pip install --no-cache-dir -r requirements.txt
+COPY . ${LAMBDA_TASK_ROOT}
 
-COPY . .
-
-EXPOSE 8080
-
-CMD ["python", "api.py"]
+CMD ["api.handler"]

@@ -79,6 +79,7 @@ def deep_normalize(text):
 
 def check_text_for_fraud(text):
     score = 0
+    is_fraud = False
     has_link = bool(re.search(URL_PATTERN, text.lower()))
     # --- PASSO A: Análise de Intenção via IA ---
     # 1 ou 2 estrelas indicam teor negativo/urgente/agressivo
@@ -117,6 +118,7 @@ def check_text_for_fraud(text):
     # Define o risk_level baseado no score
     if final_score > 75:
         level = "CRÍTICO"
+        is_fraud = True
     elif final_score >= 55:
         level = "ALTO"
         is_fraud = True

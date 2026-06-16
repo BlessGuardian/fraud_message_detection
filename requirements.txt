@@ -6,4 +6,5 @@ python-dotenv
 psycopg2-binary
 transformers
 torch
-boto3
+aioboto3
+mangum

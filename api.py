@@ -3,9 +3,10 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from database import get_fraud_logs, register_fraud_log
+from database import get_fraud_logs, register_fraud_log, delete_log_query, delete_all_logs
 from model import treat_message_llm
 import uvicorn
+from mangum import Mangum
 
 app = FastAPI(
     title="Bless Guardian",
@@ -21,14 +22,14 @@ class MessageRequest(BaseModel):
 
 
 @app.post("/detect", status_code=201)
-def detect_fraud(request: MessageRequest):
+async def detect_fraud(request: MessageRequest):
     try:
         device_id = request.device_id or request.user_id
         if not device_id:
             raise HTTPException(status_code=422, detail="device_id is required")
 
-        analise = treat_message_llm(request.message_content)
-        db_result = register_fraud_log(
+        analise = await treat_message_llm(request.message_content)
+        db_result = await register_fraud_log(
             device_id=device_id,
             content=request.message_content,
             score=analise.get("score"),
@@ -49,13 +50,13 @@ def detect_fraud(request: MessageRequest):
 
 
 @app.get("/logs")
-def api_get_logs(
+async def api_get_logs(
     device_id: Optional[str] = None,
     user_id: Optional[str] = None,
     limit: int = 50,
     offset: int = 0
 ):
-    resultados = get_fraud_logs(
+    resultados = await get_fraud_logs(
         device_id=device_id,
         user_id=user_id,
         limit=limit,
@@ -71,11 +72,25 @@ def api_get_logs(
         "data": resultados
     }
 
+@app.delete("/logs")
+async def delete_log(user_id: str, detected_at: str):
+    try:
+        return await delete_log_query(user_id=user_id, detected_at=detected_at)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/logs/all")
+async def delete_all_message_logs():
+    try:
+        return await delete_all_logs()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")
-def health_check():
+async def health_check():
     return {"status": "healthy"}
 
+handler = Mangum(app)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8080)
