@@ -3,16 +3,17 @@ import uuid
 from datetime import datetime, timezone,timedelta
 from decimal import Decimal
 
-import aioboto3
+import boto3
 from boto3.dynamodb.conditions import Key
 from dotenv import load_dotenv
 
 load_dotenv()
 DYNAMO_TABLE_NAME = os.getenv("DYNAMO_TABLE_NAME")
-AWS_REGION = os.getenv("AWS_REGION")
+AWS_REGION = os.getenv("AWS_REGION","us-east-1")
 
-# O aioboto3 trabalha com sessões que geram recursos de forma assíncrona
-boto_session = aioboto3.Session(region_name=AWS_REGION)
+boto_session = boto3.Session(region_name=AWS_REGION)
+dynamodb = boto_session.resource('dynamodb',region_name="us-east-1")
+message_logs_table = dynamodb.Table(DYNAMO_TABLE_NAME)
 
 def get_deterministic_user_id(device_id: str) -> str:
     """
@@ -42,10 +43,7 @@ async def register_fraud_log(device_id, content, score, is_fraud, explanation=No
         "source": source
     }
 
-    # Context manager assíncrono do aioboto3
-    async with boto_session.resource('dynamodb') as dynamodb:
-        dynamo_table = await dynamodb.Table(DYNAMO_TABLE_NAME)
-        await dynamo_table.put_item(Item=item)
+    message_logs_table.put_item(Item=item)
         
     return {"success": True, "user_id": user_id, "database": "dynamodb"}
 
@@ -54,21 +52,20 @@ async def get_fraud_logs(device_id=None, user_id=None, limit=50, offset=0):
     """Busca o histórico de logs exclusivamente no DynamoDB."""
     query_user_id = user_id or (get_deterministic_user_id(device_id) if device_id else None)
     
-    async with boto_session.resource('dynamodb') as dynamodb:
-        dynamo_table = await dynamodb.Table(DYNAMO_TABLE_NAME)
-        
-        if query_user_id:
-            # Se temos o user_id, usamos Query (Mais rápido e eficiente)
-            response = await dynamo_table.query(
-                KeyConditionExpression=Key('user_id').eq(query_user_id),
-                ScanIndexForward=False 
-            )
-            items = response.get('Items', [])
-        else:
-            # Sem Partition Key, é necessário fazer um Scan
-            response = await dynamo_table.scan()
-            items = response.get('Items', [])
-            items.sort(key=lambda x: x.get('detected_at', ''), reverse=True)
+    
+    
+    if query_user_id:
+        # Se temos o user_id, usamos Query (Mais rápido e eficiente)
+        response = message_logs_table.query(
+            KeyConditionExpression=Key('user_id').eq(query_user_id),
+            ScanIndexForward=False 
+        )
+        items = response.get('Items', [])
+    else:
+        # Sem Partition Key, é necessário fazer um Scan
+        response = message_logs_table.scan()
+        items = response.get('Items', [])
+        items.sort(key=lambda x: x.get('detected_at', ''), reverse=True)
 
     # Convertendo tipos do DynamoDB de volta para o padrão da API e aplicando offset/limit
     sliced_items = items[offset : offset + limit]
@@ -81,9 +78,7 @@ async def get_fraud_logs(device_id=None, user_id=None, limit=50, offset=0):
 
 async def delete_log_query(user_id, detected_at):
     """Deleta um log específico do DynamoDB."""
-    async with boto_session.resource('dynamodb') as dynamodb:
-        dynamo_table = await dynamodb.Table(DYNAMO_TABLE_NAME)
-        await dynamo_table.delete_item(Key={"user_id": user_id, "detected_at": detected_at})
+    message_logs_table.delete_item(Key={"user_id": user_id, "detected_at": detected_at})
     return {"status": "deleted", "log": {"user_id": user_id, "detected_at": detected_at}}
 
 
@@ -93,32 +88,30 @@ async def delete_all_logs():
         print(f"Iniciando a limpeza da tabela...")
         items = []
         
-        async with boto_session.resource('dynamodb') as dynamodb:
-            dynamo_table = await dynamodb.Table(DYNAMO_TABLE_NAME)
-            
-            # Escaneia a tabela buscando APENAS as chaves primárias
-            scan = await dynamo_table.scan(ProjectionExpression="user_id, detected_at")
+
+        # Escaneia a tabela buscando APENAS as chaves primárias
+        scan = message_logs_table.scan(ProjectionExpression="user_id, detected_at")
+        items.extend(scan.get('Items', []))
+        
+        while 'LastEvaluatedKey' in scan:
+            scan = message_logs_table.scan(
+                ProjectionExpression="user_id, detected_at",
+                ExclusiveStartKey=scan['LastEvaluatedKey']
+            )
             items.extend(scan.get('Items', []))
             
-            while 'LastEvaluatedKey' in scan:
-                scan = await dynamo_table.scan(
-                    ProjectionExpression="user_id, detected_at",
-                    ExclusiveStartKey=scan['LastEvaluatedKey']
-                )
-                items.extend(scan.get('Items', []))
-                
-            if not items:
-                print("A tabela já está totalmente vazia.")
-                return {"success": True, "message": "A tabela já estava vazia.", "deleted_count": 0}
-                
-            # Deleção assíncrona item a item
-            for item in items:
-                await dynamo_table.delete_item(
-                    Key={
-                        'user_id': item['user_id'],
-                        'detected_at': item['detected_at']
-                    }
-                )
+        if not items:
+            print("A tabela já está totalmente vazia.")
+            return {"success": True, "message": "A tabela já estava vazia.", "deleted_count": 0}
+            
+        # Deleção assíncrona item a item
+        for item in items:
+            message_logs_table.delete_item(
+                Key={
+                    'user_id': item['user_id'],
+                    'detected_at': item['detected_at']
+                }
+            )
                 
         print(f"Limpeza concluída com sucesso! Total de itens removidos: {len(items)}")
         return {"success": True, "deleted_count": len(items)}

@@ -3,8 +3,4 @@ uvicorn
 pydantic
 openai
 python-dotenv
-psycopg2-binary
-transformers
-torch
-aioboto3
 mangum
