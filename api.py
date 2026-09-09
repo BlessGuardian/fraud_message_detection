@@ -1,7 +1,8 @@
+from enum import Enum
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from database import get_fraud_logs, register_fraud_log, delete_log_query, delete_all_logs
 from model import treat_message_llm
@@ -14,11 +15,21 @@ app = FastAPI(
 )
 
 
+class MessageSource(str, Enum):
+    SMS = "sms"
+    WHATSAPP = "whatsapp"
+    TELEGRAM = "telegram"
+    INSTAGRAM = "instagram"
+    MANUAL = "manual"
+    CALL = "call"
+    UNKNOWN = "unknown"
+
+
 class MessageRequest(BaseModel):
     device_id: Optional[str] = None
     user_id: Optional[str] = None
-    message_content: str
-    source: str
+    message_content: str = Field(min_length=1, max_length=12000)
+    source: MessageSource
 
 
 @app.post("/detect", status_code=201)
@@ -35,7 +46,7 @@ async def detect_fraud(request: MessageRequest):
             score=analise.get("score"),
             is_fraud=analise.get("tentativa_fraude"),
             explanation=analise.get("veredito_curto"),
-            source=request.source
+            source=request.source.value
         )
 
         return {

@@ -82,7 +82,10 @@ Saída:
 }
 ```
 
-`source` aceito em minúsculas: `sms`, `whatsapp`, `telegram`, `instagram`, `manual`, `unknown`.
+`source` aceito em minúsculas: `sms`, `whatsapp`, `telegram`, `instagram`, `manual`, `call`, `unknown`.
+
+Para chamadas, o Android envia somente a transcrição final em `message_content`
+com `source: "call"`. O backend não recebe nem persiste áudio.
 
 ### Contrato `GET /logs?device_id=...&limit=50&offset=0`
 
