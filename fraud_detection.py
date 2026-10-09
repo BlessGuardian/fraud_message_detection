@@ -18,7 +18,7 @@ try:
     
     print(f"Carregando Modelo ONNX de: {CAMINHO_MODELO}/model_base.onnx")
     sessao_onnx = ort.InferenceSession(
-        f"{CAMINHO_MODELO}/model_quantized.onnx",
+        f"{CAMINHO_MODELO}/model_base.onnx",
         sess=opcoes_sessao,
         providers=["CPUExecutionProvider"]
     )

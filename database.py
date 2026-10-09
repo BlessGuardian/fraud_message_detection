@@ -10,10 +10,50 @@ from dotenv import load_dotenv
 load_dotenv()
 DYNAMO_TABLE_NAME = os.getenv("DYNAMO_TABLE_NAME")
 AWS_REGION = os.getenv("AWS_REGION","us-east-1")
+USERS_TABLE_NAME = os.getenv("USERS_TABLE_NAME")
 
 boto_session = boto3.Session(region_name=AWS_REGION)
 dynamodb = boto_session.resource('dynamodb',region_name="us-east-1")
 message_logs_table = dynamodb.Table(DYNAMO_TABLE_NAME)
+users_table = dynamodb.Table(USERS_TABLE_NAME)
+
+async def register_user_db(device_id: str, email: str, password_hash: str):
+    """
+    Registra um novo usuário Guardião no banco de dados.
+    Retorna o user_id gerado ou um erro se o e-mail já existir.
+    """
+    id = get_deterministic_user_id(device_id)
+    try:
+        # Usamos condition expression para evitar sobrescrever um email existente
+        response = users_table.put_item(
+            Item={
+                'email': email,
+                'user_id': id,
+                'password_hash': password_hash,
+                'role': 'default',
+                'linked_numbers': [], 
+                'created_at': datetime.now(timezone(timedelta(hours=-3))).isoformat()
+            },
+            ConditionExpression='attribute_not_exists(id)'
+        )
+        return {"success": True, "user_id": id}
+    except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
+        return {"success": False, "error": "Este celular ja foi cadastrado"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+async def get_user(email: str):
+    try:
+        response = users_table.query(
+            IndexName='EmailIndex',
+            KeyConditionExpression=Key('email').eq(email)
+        )
+        items = response.get('Items', [])
+        
+        return items[0] if items else None
+    except Exception as e:
+        print(f"Erro ao buscar usuário por email: {e}")
+        return None
 
 def get_deterministic_user_id(device_id: str) -> str:
     """
@@ -25,7 +65,7 @@ def get_deterministic_user_id(device_id: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_OID, device_id))
 
 
-async def register_fraud_log(device_id, content, score, is_fraud, explanation=None, source=None):
+async def register_fraud_log(device_id, content, score, is_fraud, category, explanation=None, source=None):
     """Registra o log de análise de fraude exclusivamente no DynamoDB."""
     user_id = get_deterministic_user_id(device_id)
     fraud_log_id = str(uuid.uuid4())
@@ -40,7 +80,8 @@ async def register_fraud_log(device_id, content, score, is_fraud, explanation=No
         "risk_score": Decimal(str(score)),   
         "is_fraud": is_fraud,
         "explanation": explanation,
-        "source": source
+        "source": source,
+        "category": category
     }
 
     message_logs_table.put_item(Item=item)
@@ -48,11 +89,9 @@ async def register_fraud_log(device_id, content, score, is_fraud, explanation=No
     return {"success": True, "user_id": user_id, "database": "dynamodb"}
 
 
-async def get_fraud_logs(device_id=None, user_id=None, limit=50, offset=0):
+async def get_fraud_logs(limit=None, device_id=None, user_id=None, offset=0):
     """Busca o histórico de logs exclusivamente no DynamoDB."""
     query_user_id = user_id or (get_deterministic_user_id(device_id) if device_id else None)
-    
-    
     
     if query_user_id:
         # Se temos o user_id, usamos Query (Mais rápido e eficiente)
@@ -66,9 +105,11 @@ async def get_fraud_logs(device_id=None, user_id=None, limit=50, offset=0):
         response = message_logs_table.scan()
         items = response.get('Items', [])
         items.sort(key=lambda x: x.get('detected_at', ''), reverse=True)
+    if limit is None or limit <= 0:
+        sliced_items = items[offset:]
+    else:
+        sliced_items = items[offset : offset + limit]
 
-    # Convertendo tipos do DynamoDB de volta para o padrão da API e aplicando offset/limit
-    sliced_items = items[offset : offset + limit]
     for item in sliced_items:
         if isinstance(item.get('risk_score'), Decimal):
             item['risk_score'] = float(item['risk_score'])

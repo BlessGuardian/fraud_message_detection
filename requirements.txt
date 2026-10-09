@@ -4,6 +4,9 @@ pydantic
 openai
 python-dotenv
 mangum
-onnxruntime>=1.18.0
+onnxruntime
 transformers
-numpy<2.0.0
+numpy
+bcrypt
+pydantic[email]
+PyJWT

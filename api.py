@@ -1,12 +1,13 @@
 from typing import Optional
 import asyncio
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from fraud_detection import analyze_message
-from database import get_fraud_logs, register_fraud_log, delete_log_query, delete_all_logs
+from database import get_fraud_logs, register_fraud_log, delete_log_query, delete_all_logs, register_user_db, get_user
 from model import treat_message_llm
 import uvicorn
 from mangum import Mangum
+from auth import create_access_token, get_password_hash, verify_password
 
 app = FastAPI(
     title="Bless Guardian",
@@ -20,6 +21,56 @@ class MessageRequest(BaseModel):
     message_content: str
     source: str
 
+class RegisterRequest(BaseModel):
+    device_id: Optional[str] = None
+    email: EmailStr
+    password: str
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+@app.post("/register", status_code=201, tags=["Auth"])
+async def register_user(request: RegisterRequest):
+    hashed_password = get_password_hash(request.password)
+
+    db_result = await register_user_db(
+        device_id=request.device_id,
+        email=request.email, 
+        password_hash=hashed_password
+    )
+
+    if not db_result.get("success"):
+        raise HTTPException(status_code=400, detail=db_result.get("error"))
+
+    return {
+        "status": "success",
+        "message": "Usuário registrado com sucesso.",
+        "user_id": db_result.get("user_id")
+    }
+
+@app.post("/login", tags=["Auth"])
+async def login_user(request: LoginRequest):
+    user = await get_user(request.email)
+    
+    if not user or not verify_password(request.password, user['password_hash']):
+        raise HTTPException(status_code=401, detail="E-mail ou senha incorretos")
+    
+    # 3. Gera o token importando do seu novo arquivo auth.py
+    access_token = create_access_token(
+        data={
+            "sub": user['email'], 
+            "user_id": user['user_id'], 
+            "role": user.get('role', 'default')
+        }
+    )
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user_id": user['user_id'],
+        "role": user.get('role', 'default')
+    }
 
 @app.post("/detect", status_code=201)
 async def detect_fraud(request: MessageRequest):
@@ -62,6 +113,7 @@ async def detect_fraud(request: MessageRequest):
             content=request.message_content,
             score=0, 
             is_fraud=is_fraud_db,
+            category= analise_llm.get("categoria"),
             explanation=explicacao,
             source=request.source
         )
@@ -92,13 +144,13 @@ async def detect_fraud(request: MessageRequest):
 async def api_get_logs(
     device_id: Optional[str] = None,
     user_id: Optional[str] = None,
-    limit: int = 50,
+    limit: Optional[int] = None,
     offset: int = 0
 ):
     resultados = await get_fraud_logs(
+        limit=limit,
         device_id=device_id,
         user_id=user_id,
-        limit=limit,
         offset=offset
     )
 
