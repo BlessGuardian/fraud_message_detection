@@ -1,19 +1,21 @@
 from typing import Optional
 import asyncio
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException,Depends
+from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, EmailStr
 from fraud_detection import analyze_message
 from database import get_fraud_logs, register_fraud_log, delete_log_query, delete_all_logs, register_user_db, get_user
 from model import treat_message_llm
 import uvicorn
 from mangum import Mangum
-from auth import create_access_token, get_password_hash, verify_password
+from auth import create_access_token, get_password_hash, verify_password, decode_access_token
 
 app = FastAPI(
     title="Bless Guardian",
     description="Agente anti-fraude de deteccao de engenharia social."
 )
 
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 class MessageRequest(BaseModel):
     device_id: Optional[str] = None
@@ -145,8 +147,17 @@ async def api_get_logs(
     device_id: Optional[str] = None,
     user_id: Optional[str] = None,
     limit: Optional[int] = None,
-    offset: int = 0
+    offset: int = 0,
+    token: str = Depends(oauth2_scheme)
 ):
+
+    payload = decode_access_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Token inválido ou expirado")
+    user_id = payload.get("user_id")
+    device_id = None
+
+
     resultados = await get_fraud_logs(
         limit=limit,
         device_id=device_id,
