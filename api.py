@@ -1,5 +1,6 @@
 from typing import Optional
 import asyncio
+import traceback
 from fastapi import FastAPI, HTTPException,Depends
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, EmailStr
@@ -139,6 +140,7 @@ async def detect_fraud(request: MessageRequest):
     except HTTPException:
         raise
     except Exception as e:
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 
