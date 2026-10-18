@@ -2,7 +2,7 @@ import os
 import uuid
 from datetime import datetime, timezone,timedelta
 from decimal import Decimal
-
+from collections import Counter
 import boto3
 from boto3.dynamodb.conditions import Key
 from dotenv import load_dotenv
@@ -16,6 +16,61 @@ boto_session = boto3.Session(region_name=AWS_REGION)
 dynamodb = boto_session.resource('dynamodb',region_name="us-east-1")
 message_logs_table = dynamodb.Table(DYNAMO_TABLE_NAME)
 users_table = dynamodb.Table(USERS_TABLE_NAME)
+
+async def get_fraud_stats(user_id = None):
+    """
+    Busca os logs e retorna a contagem de golpes agrupada por categoria.
+    Se user_id for fornecido, filtra por usuário (Query). 
+    Se for None, varre todo o banco (Scan).
+    """
+    try:
+        items = []
+        
+        if user_id:
+            # Busca otimizada apenas para o usuário autenticado
+            response = message_logs_table.query(
+                KeyConditionExpression=Key('user_id').eq(user_id),
+                ProjectionExpression="category"
+            )
+            items.extend(response.get('Items', []))
+        else:
+            # Varredura global para a interface web
+            response = message_logs_table.scan(
+                ProjectionExpression="category"
+            )
+            items.extend(response.get('Items', []))
+            
+            # Garante que vai ler todo o banco caso a tabela tenha mais de 1MB de dados
+            while 'LastEvaluatedKey' in response:
+                response = message_logs_table.scan(
+                    ProjectionExpression="category",
+                    ExclusiveStartKey=response['LastEvaluatedKey']
+                )
+                items.extend(response.get('Items', []))
+
+        # Extrai as categorias, tratando valores vazios ou ausentes
+        categorias = [
+            item.get('category') if item.get('category') else 'Desconhecido' 
+            for item in items
+        ]
+        
+        # O Counter agrupa e soma tudo automaticamente
+        contagem = dict(Counter(categorias))
+        
+        # Formata para JSON (lista de dicionários)
+        resultado = [
+            {"categoria": cat, "quantidade": qtd} 
+            for cat, qtd in contagem.items()
+        ]
+        
+        # Ordena da maior quantidade para a menor
+        resultado.sort(key=lambda x: x['quantidade'], reverse=True)
+        
+        return {"success": True, "data": resultado}
+        
+    except Exception as e:
+        print(f"Erro ao buscar estatísticas: {e}")
+        return {"success": False, "error": str(e)}
 
 async def register_user_db(device_id: str, email: str, password_hash: str):
     """

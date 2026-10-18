@@ -5,7 +5,7 @@ from fastapi import FastAPI, HTTPException,Depends
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, EmailStr
 from fraud_detection import analyze_message
-from database import get_fraud_logs, register_fraud_log, delete_log_query, delete_all_logs, register_user_db, get_user
+from database import get_fraud_logs, register_fraud_log, delete_log_query, delete_all_logs, register_user_db, get_user,get_fraud_stats
 from model import treat_message_llm
 import uvicorn
 from mangum import Mangum
@@ -17,6 +17,7 @@ app = FastAPI(
 )
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="login", auto_error=False)
 
 class MessageRequest(BaseModel):
     device_id: Optional[str] = None
@@ -189,6 +190,36 @@ async def delete_all_message_logs():
         return await delete_all_logs()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/stats", tags=["Dashboard"])
+async def api_get_stats(token: Optional[str] = Depends(oauth2_scheme_optional)):
+    """
+    Retorna as estatísticas de golpes. 
+    Se o token for enviado, retorna apenas os dados do usuário.
+    Se nenhum token for enviado, retorna as estatísticas globais.
+    """
+    user_id_seguro = None
+
+    # Se um token foi enviado, aplicamos a trava de segurança para pegar o usuário
+    if token:
+        payload = decode_access_token(token)
+        if not payload:
+            raise HTTPException(status_code=401, detail="Token inválido ou expirado")
+        
+        user_id_seguro = payload.get("user_id")
+
+    # Chama o banco de dados (se user_id_seguro for None, ele faz o Scan global)
+    resultados = await get_fraud_stats(user_id=user_id_seguro)
+    
+    if not resultados.get("success"):
+        raise HTTPException(status_code=500, detail=resultados.get("error"))
+        
+    return {
+        "status": "success",
+        "escopo": "usuario" if user_id_seguro else "global",
+        "total_categorias": len(resultados.get("data", [])),
+        "stats": resultados.get("data")
+    }
 
 @app.get("/health")
 async def health_check():
