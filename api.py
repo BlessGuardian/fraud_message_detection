@@ -5,7 +5,7 @@ from fastapi import FastAPI, HTTPException,Depends
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, EmailStr
 from fraud_detection import analyze_message
-from database import get_fraud_logs, register_fraud_log, delete_log_query, delete_all_logs, register_user_db, get_user,get_fraud_stats
+from database import get_fraud_logs, register_fraud_log, delete_log_query, delete_all_logs, register_user_db, get_user,get_fraud_stats, calculate_scores, get_user_score
 from model import treat_message_llm
 import uvicorn
 from mangum import Mangum
@@ -219,6 +219,48 @@ async def api_get_stats(token: Optional[str] = Depends(oauth2_scheme_optional)):
         "escopo": "usuario" if user_id_seguro else "global",
         "total_categorias": len(resultados.get("data", [])),
         "stats": resultados.get("data")
+    }
+
+@app.post("/admin/calculate-scores", tags=["Admin Dashboard"])
+async def api_calculate_scores():
+    """
+    Endpoint manual para MVP. 
+    Aciona o recálculo matemático de Vulnerability Score para TODOS os utilizadores.
+    """
+    # OPCIONAL: Se quiser proteger este endpoint apenas para administradores:
+    # if current_user.get("role") != "admin":
+    #     raise HTTPException(status_code=403, detail="Acesso negado. Apenas administradores.")
+    
+    resultado = await calculate_scores()
+    
+    if resultado.get("status") == "error":
+        raise HTTPException(status_code=500, detail=resultado.get("error"))
+        
+    return resultado
+
+@app.get("/score", tags=["Dashboard"])
+async def api_get_score(token: str = Depends(oauth2_scheme)):
+    """
+    Devolve o score de vulnerabilidade (de 0.0 a 1.0) do usuário autenticado.
+    Baseado no cálculo estatístico de 3 desvios padrões (atualizado via POST /admin/calculate-scores).
+    """
+    payload = decode_access_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Token inválido ou expirado")
+    user_id = payload.get("user_id")
+    
+    # Consulta rápida no banco de dados
+    resultado = await get_user_score(user_id)
+    
+    if not resultado.get("success"):
+        raise HTTPException(status_code=404, detail=resultado.get("error"))
+        
+    score = resultado.get("score")
+    
+    return {
+        "status": "success",
+        "user_id": user_id,
+        "vulnerability_score": score,
     }
 
 @app.get("/health")

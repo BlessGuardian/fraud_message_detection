@@ -6,6 +6,8 @@ from collections import Counter
 import boto3
 from boto3.dynamodb.conditions import Key
 from dotenv import load_dotenv
+import math
+from collections import defaultdict
 
 load_dotenv()
 DYNAMO_TABLE_NAME = os.getenv("DYNAMO_TABLE_NAME")
@@ -17,6 +19,110 @@ dynamodb = boto_session.resource('dynamodb',region_name="us-east-1")
 message_logs_table = dynamodb.Table(DYNAMO_TABLE_NAME)
 users_table = dynamodb.Table(USERS_TABLE_NAME)
 
+async def calculate_scores():
+    """
+    Varre os logs de fraude, calcula as estatísticas globais (3 desvios padrões) 
+    e atualiza a tabela de utilizadores com o novo score.
+    """
+    try:
+        frauds_per_user = defaultdict(int)
+        
+        # 1. Varredura de fraudes confirmadas
+        response = message_logs_table.scan(
+            FilterExpression="is_fraud = :true_val",
+            ExpressionAttributeValues={":true_val": True},
+            ProjectionExpression="user_id"
+        )
+        items = response.get('Items', [])
+        
+        # Paginação caso a tabela de logs já tenha passado de 1MB de dados
+        while 'LastEvaluatedKey' in response:
+            response = message_logs_table.scan(
+                FilterExpression="is_fraud = :true_val",
+                ExpressionAttributeValues={":true_val": True},
+                ProjectionExpression="user_id",
+                ExclusiveStartKey=response['LastEvaluatedKey']
+            )
+            items.extend(response.get('Items', []))
+            
+        # 2. Conta fraudes por user_id
+        for item in items:
+            user_id = item.get('user_id')
+            if user_id:
+                frauds_per_user[user_id] += 1
+                
+        if not frauds_per_user:
+            return {"status": "success", "message": "Nenhuma fraude registrada. Scores não alterados."}
+
+        # 3. Matemática: Média (μ) e Desvio Padrão (σ)
+        valores = list(frauds_per_user.values())
+        n = len(valores)
+        media = sum(valores) / n
+        
+        variancia = sum((x - media) ** 2 for x in valores) / n
+        desvio_padrao = math.sqrt(variancia)
+        
+        limite_inferior = media - (3 * desvio_padrao)
+        limite_superior = media + (3 * desvio_padrao)
+        
+        amplitude = limite_superior - limite_inferior
+        if amplitude == 0:
+            amplitude = 1 
+
+        # 4. Calcula e atualiza o score para cada utilizador
+        for user_id, count in frauds_per_user.items():
+            
+            raw_score = (count - limite_inferior) / amplitude
+            final_score = max(0.0, min(raw_score, 1.0))
+            
+            # Formata para float com 4 casas e depois converte para Decimal exigido pela AWS
+            score_aws = Decimal(str(round(final_score, 4)))
+            
+            # Atualiza o utilizador no DynamoDB
+            users_table.update_item(
+                Key={'user_id': user_id}, 
+                UpdateExpression="SET vulnerability_score = :score",
+                ExpressionAttributeValues={":score": score_aws} # <--- CORRIGIDO AQUI
+            )
+
+        return {
+            "status": "success", 
+            "updated_users": len(frauds_per_user),
+            "estatisticas": {
+                "media": round(media, 2),
+                "desvio_padrao": round(desvio_padrao, 2),
+                "limites": [round(limite_inferior, 2), round(limite_superior, 2)]
+            }
+        }
+
+    except Exception as e:
+        print(f"Erro ao calcular scores: {e}")
+        return {"status": "error", "error": str(e)}
+
+async def get_user_score(user_id: str):
+    """
+    Busca o score de vulnerabilidade (já pré-calculado) do usuário.
+    """
+    try:
+        # Busca direta e veloz pela Primary Key (user_id)
+        response = users_table.get_item(Key={'user_id': user_id}) 
+        user = response.get('Item')
+        
+        if not user:
+            return {"success": False, "error": "Usuário não encontrado"}
+            
+        # Pega o score. Se o cálculo nunca rodou para ele, o padrão de segurança é 0.0
+        score_decimal = user.get('vulnerability_score', 0.0)
+        
+        # Converte do formato Decimal do AWS boto3 para o float nativo do Python 
+        # (Isso evita o erro "Object of type Decimal is not JSON serializable" no FastAPI)
+        score_float = float(score_decimal)
+        
+        return {"success": True, "score": score_float}
+        
+    except Exception as e:
+        print(f"Erro ao buscar score: {e}")
+        return {"success": False, "error": str(e)}
 async def get_fraud_stats(user_id = None):
     """
     Busca os logs e retorna a contagem de golpes agrupada por categoria.
@@ -87,7 +193,8 @@ async def register_user_db(device_id: str, email: str, password_hash: str):
                 'password_hash': password_hash,
                 'role': 'default',
                 'linked_numbers': [], 
-                'created_at': datetime.now(timezone(timedelta(hours=-3))).isoformat()
+                'created_at': datetime.now(timezone(timedelta(hours=-3))).isoformat(),
+                'vulnerability_score': 0.0
             },
             ConditionExpression='attribute_not_exists(id)'
         )
